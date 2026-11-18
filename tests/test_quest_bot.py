@@ -150,10 +150,24 @@ def test_watcher_scan_once_deduplicates_and_notifies():
         assert len(deals_sent) == 1
         assert deals_sent[0].listed_price == 60000
 
-        # Second scan with identical listing is deduplicated
+        # Second scan with identical listing does not re-alert
         second = await watcher.scan_once()
         assert len(second) == 0
         assert len(deals_sent) == 1
+
+        # Partial buy (amount drops from 4 -> 2 at same price) does not re-alert
+        watcher.torn_api.payload = {"itemmarket": {"listings": [{"price": 60000, "amount": 2}]}}
+        third = await watcher.scan_once()
+        assert len(third) == 0
+        assert len(deals_sent) == 1
+
+        # Item sells out completely, then a brand-new listing at 60000 appears -> alerts once
+        watcher.torn_api.payload = {"itemmarket": {"listings": []}}
+        await watcher.scan_once()
+        watcher.torn_api.payload = {"itemmarket": {"listings": [{"price": 60000, "amount": 1}]}}
+        fourth = await watcher.scan_once()
+        assert len(fourth) == 1
+        assert len(deals_sent) == 2
 
     asyncio.run(run())
 

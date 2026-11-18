@@ -149,6 +149,8 @@ class QuestWatcher:
         self.alert_channel_id: Optional[int] = None
         self.quest_items: dict[int, QuestItem] = {}
         self.subscribers: set[int] = set()
+        # Tracks active alerted price tiers per item: {item_id: {listed_price: total_amount}}
+        self._active_prices: dict[int, dict[int, int]] = {}
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
@@ -227,14 +229,25 @@ class QuestWatcher:
                 continue
 
             deals = evaluate_listings(tfc_item, payload, q_item.max_overpay_pct)
+            prev_prices = self._active_prices.get(q_item.item_id, {})
+            current_prices: dict[int, int] = {}
             for deal in deals:
-                dedup_key = f"{deal.item_id}:{deal.listed_price}:{deal.amount}"
-                if self.dedup_cache.seen_recently(dedup_key):
+                current_prices[deal.listed_price] = current_prices.get(deal.listed_price, 0) + deal.amount
+
+            alerted_prices_this_scan: set[int] = set()
+            for deal in deals:
+                price = deal.listed_price
+                if price in alerted_prices_this_scan:
                     continue
-                self.dedup_cache.mark(dedup_key)
-                found_deals.append(deal)
-                if self.on_deal:
-                    await self.on_deal(deal)
+                prev_amount = prev_prices.get(price)
+                # Ping only if this price wasn't already on the market, or if new stock was added at this price
+                if prev_amount is None or current_prices[price] > prev_amount:
+                    alerted_prices_this_scan.add(price)
+                    found_deals.append(deal)
+                    if self.on_deal:
+                        await self.on_deal(deal)
+
+            self._active_prices[q_item.item_id] = current_prices
 
         return found_deals
 
